@@ -62,7 +62,13 @@ class GSplatTrainBackend:
             "--disable_viewer",
         ]
         with open(log_path, "w") as logf:
-            proc = subprocess.run(cmd, stdout=logf, stderr=subprocess.STDOUT, text=True)
+            proc = subprocess.run(
+                cmd,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=str(trainer.parent),
+            )
 
         if proc.returncode != 0:
             return TrainResult(
@@ -86,19 +92,22 @@ class GSplatTrainBackend:
 
     @staticmethod
     def _find_trainer_script() -> Path | None:
+        project_root = Path(__file__).resolve().parents[3]
+        candidates = [
+            project_root / "vendor" / "gsplat" / "examples" / "simple_trainer.py",
+            project_root / "vendor" / "simple_trainer.py",
+        ]
         try:
             import gsplat
 
-            root = Path(gsplat.__file__).resolve().parent.parent
-            candidate = root / "examples" / "simple_trainer.py"
-            if candidate.exists():
-                return candidate
+            pkg_root = Path(gsplat.__file__).resolve().parent.parent
+            candidates.insert(0, pkg_root / "examples" / "simple_trainer.py")
         except Exception:
             pass
-        for p in Path(sys.prefix).glob("**/gsplat/examples/simple_trainer.py"):
-            return p
-        local = Path(__file__).resolve().parents[3] / "vendor" / "simple_trainer.py"
-        return local if local.exists() else None
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
 
     @staticmethod
     def _find_output_ply(out_dir: Path) -> Path | None:

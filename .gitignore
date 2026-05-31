@@ -3,5 +3,6 @@ __pycache__/
 *.pyc
 .env
 data/
+vendor/gsplat/
 .pytest_cache/
 *.egg-info/
