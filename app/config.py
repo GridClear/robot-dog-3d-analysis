@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     default_intrinsics: Path | None = None
     inference_timeout_sec: int = 3600
 
+    # Splat lifting (Pi3X) — runs after each SANA-WM clip completes.
+    splat_num_views: int = 8
+    splat_max_gaussians: int = 250_000
+    splat_conf_threshold: float = 0.30
+    splat_timeout_sec: int = 600
+
     max_clip_seconds: float = 60.0
     max_image_height: int = 720
     max_images: int = 64

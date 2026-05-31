@@ -138,9 +138,14 @@ async def session_events(session_id: str) -> StreamingResponse:
     )
 
 
-@router.get("/{session_id}/video/latest.mp4")
-async def latest_video(session_id: str) -> FileResponse:
-    path = storage.latest_video_path(session_id)
+@router.get("/{session_id}/splat/latest.splat")
+async def latest_splat(session_id: str) -> FileResponse:
+    path = storage.latest_splat_path(session_id)
     if not path.is_file():
-        raise HTTPException(404, "no video yet")
-    return FileResponse(path, media_type="video/mp4", filename="latest.mp4")
+        raise HTTPException(404, "no splat yet")
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename="latest.splat",
+        headers={"Cache-Control": "no-store"},
+    )

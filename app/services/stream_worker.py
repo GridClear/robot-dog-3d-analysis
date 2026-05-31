@@ -112,9 +112,9 @@ async def _run_loop(session_id: str, cancel: asyncio.Event) -> None:
                     },
                 )
 
-                tmp = storage.generation_temp_path(session_id, index)
-                final = storage.generation_video_path(session_id, index)
-                latest = storage.latest_video_path(session_id)
+                tmp = storage.generation_splat_temp_path(session_id, index)
+                final = storage.generation_splat_path(session_id, index)
+                latest = storage.latest_splat_path(session_id)
 
                 async with _gpu_lock:
                     result = await sana_runner.run_inference(
@@ -136,15 +136,15 @@ async def _run_loop(session_id: str, cancel: asyncio.Event) -> None:
                     storage.write_meta(record)
                     break
 
-                if result.ok and result.output_mp4:
-                    sana_runner.promote_video(result.output_mp4, final, latest)
+                if result.ok and result.output_splat:
+                    sana_runner.promote_splat(result.output_splat, final, latest)
                     record.generation_id += 1
                     if index < len(record.images):
                         record.images[index].status = ImageStatus.DONE
                         record.images[index].elapsed_sec = result.elapsed_sec
+                        record.images[index].n_gaussians = result.n_gaussians
                     storage.write_meta(record)
 
-                    clip_sec = settings.capped_num_frames / max(settings.fps, 1)
                     wait_sec = max(0.0, record.interval_sec - result.elapsed_sec)
                     _publish(
                         session_id,
@@ -153,8 +153,8 @@ async def _run_loop(session_id: str, cancel: asyncio.Event) -> None:
                             "session_id": session_id,
                             "index": index,
                             "generation_id": record.generation_id,
-                            "url": f"/v1/sessions/{session_id}/video/latest.mp4",
-                            "duration_sec": clip_sec,
+                            "url": f"/v1/sessions/{session_id}/splat/latest.splat",
+                            "n_gaussians": result.n_gaussians,
                             "elapsed_sec": result.elapsed_sec,
                             "next_in_sec": wait_sec,
                         },

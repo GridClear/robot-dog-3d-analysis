@@ -30,6 +30,7 @@ class ImageQueueItem(BaseModel):
     status: ImageStatus = ImageStatus.PENDING
     error: str | None = None
     elapsed_sec: float | None = None
+    n_gaussians: int | None = None
 
 
 class SessionRecord(BaseModel):

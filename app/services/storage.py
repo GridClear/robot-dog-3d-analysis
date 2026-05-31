@@ -43,16 +43,16 @@ def prompt_path(session_id: str) -> Path:
     return session_dir(session_id) / "prompt.txt"
 
 
-def latest_video_path(session_id: str) -> Path:
-    return artifacts_dir(session_id) / "latest.mp4"
+def latest_splat_path(session_id: str) -> Path:
+    return artifacts_dir(session_id) / "latest.splat"
 
 
-def generation_video_path(session_id: str, index: int) -> Path:
-    return artifacts_dir(session_id) / f"gen_{index:04d}.mp4"
+def generation_splat_path(session_id: str, index: int) -> Path:
+    return artifacts_dir(session_id) / f"gen_{index:04d}.splat"
 
 
-def generation_temp_path(session_id: str, index: int) -> Path:
-    return artifacts_dir(session_id) / f"gen_{index:04d}.tmp.mp4"
+def generation_splat_temp_path(session_id: str, index: int) -> Path:
+    return artifacts_dir(session_id) / f"gen_{index:04d}.tmp.splat"
 
 
 def save_prompt(session_id: str, prompt: str) -> None:

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>World Model — SANA-WM</title>
+  <title>World Model — SANA-WM → Gaussian Splat</title>
   <style>
     :root {
       --bg: #0f1117;
@@ -27,7 +27,7 @@
       grid-template-columns: 400px 1fr;
     }
     @media (max-width: 900px) {
-      body { grid-template-columns: 1fr; grid-template-rows: auto 50vh; }
+      body { grid-template-columns: 1fr; grid-template-rows: auto 60vh; }
     }
     aside {
       border-right: 1px solid var(--border);
@@ -36,6 +36,7 @@
       max-height: 100vh;
     }
     main {
+      position: relative;
       display: flex;
       flex-direction: column;
       min-height: 100vh;
@@ -121,32 +122,42 @@
     #queue li.running { color: var(--accent); }
     #queue li.done { color: var(--ok); }
     #queue li.failed { color: var(--err); }
-    .video-wrap {
+    #splatCanvas {
       flex: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 16px;
+      width: 100%;
+      height: 100%;
+      display: block;
+      touch-action: none;
     }
-    video {
-      max-width: 100%;
-      max-height: calc(100vh - 48px);
-      border-radius: 8px;
-      background: #000;
-    }
-    .video-meta {
-      text-align: center;
-      padding: 8px;
+    .viewer-meta {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.55);
       color: var(--muted);
-      font-size: 0.8rem;
+      font-size: 0.78rem;
+      pointer-events: none;
+    }
+    .viewer-hint {
+      position: absolute;
+      right: 12px;
+      top: 12px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.55);
+      color: var(--muted);
+      font-size: 0.72rem;
+      pointer-events: none;
     }
     label.check { text-transform: none; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--text); }
   </style>
 </head>
 <body>
   <aside>
-    <h1>World Model Stream</h1>
-    <p class="sub">SANA-WM — sequential images → 720p video (production cadence)</p>
+    <h1>World Model → Gaussian Splat</h1>
+    <p class="sub">SANA-WM rolls camera; Pi3X lifts to 3D; you orbit the splat live.</p>
 
     <div id="sanaStatus" class="status-box">Loading config…</div>
 
@@ -184,19 +195,24 @@
   </aside>
 
   <main>
-    <div class="video-wrap">
-      <video id="live" autoplay muted loop playsinline playsInline></video>
-    </div>
-    <div class="video-meta" id="videoMeta">No generation yet</div>
+    <canvas id="splatCanvas"></canvas>
+    <div class="viewer-hint">drag to orbit · scroll to zoom · right-drag to pan</div>
+    <div class="viewer-meta" id="viewerMeta">No generation yet</div>
   </main>
 
-  <script>
+  <script type="module">
+    import * as SPLAT from "https://cdn.jsdelivr.net/npm/gsplat@latest/+esm";
+
     const state = {
       files: [],
       sessionId: null,
       eventSource: null,
       generationId: 0,
       config: null,
+      scene: null,
+      camera: null,
+      renderer: null,
+      controls: null,
     };
 
     const dropZone = document.getElementById('dropZone');
@@ -204,12 +220,31 @@
     const thumbs = document.getElementById('thumbs');
     const btnStart = document.getElementById('btnStart');
     const btnStop = document.getElementById('btnStop');
-    const live = document.getElementById('live');
-    const videoMeta = document.getElementById('videoMeta');
+    const canvas = document.getElementById('splatCanvas');
+    const viewerMeta = document.getElementById('viewerMeta');
     const sanaStatus = document.getElementById('sanaStatus');
     const queueEl = document.getElementById('queue');
     const motion = document.getElementById('motion');
     const promptEl = document.getElementById('prompt');
+
+    function initViewer() {
+      state.scene = new SPLAT.Scene();
+      state.camera = new SPLAT.Camera();
+      state.renderer = new SPLAT.WebGLRenderer(canvas);
+      state.controls = new SPLAT.OrbitControls(state.camera, canvas);
+      const loop = () => {
+        state.controls.update();
+        state.renderer.render(state.scene, state.camera);
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+    }
+
+    async function loadSplat(url) {
+      // Replace the scene wholesale so old gaussians are released.
+      state.scene = new SPLAT.Scene();
+      await SPLAT.Loader.LoadAsync(url, state.scene);
+    }
 
     async function loadConfig() {
       const r = await fetch('/v1/sessions/config');
@@ -223,7 +258,9 @@
         sanaStatus.textContent = `SANA not ready: ${state.config.sana_note}. Run scripts/setup_sana_wm.sh`;
       } else {
         sanaStatus.className = 'status-box';
-        sanaStatus.textContent = `Interval ~${interval}s · ${state.config.num_frames} frames @ ${state.config.fps} fps (≤${state.config.max_clip_seconds}s clip)`;
+        sanaStatus.textContent =
+          `Interval ~${interval}s · ${state.config.num_frames} frames @ ${state.config.fps} fps ` +
+          `(≤${state.config.max_clip_seconds}s clip) · splat lifted with Pi3X`;
       }
     }
 
@@ -263,30 +300,38 @@
         queueEl.innerHTML = '<li style="color:var(--muted)">No queue</li>';
         return;
       }
-      queueEl.innerHTML = images.map(img =>
-        `<li class="${img.status}"><span>#${img.index + 1} ${img.filename}</span><span>${img.status}</span></li>`
-      ).join('');
+      queueEl.innerHTML = images.map(img => {
+        const detail = img.n_gaussians
+          ? `${img.status} · ${img.n_gaussians.toLocaleString()} g`
+          : img.status;
+        return `<li class="${img.status}"><span>#${img.index + 1} ${img.filename}</span><span>${detail}</span></li>`;
+      }).join('');
     }
 
     function connectEvents(sessionId) {
       if (state.eventSource) state.eventSource.close();
       state.eventSource = new EventSource(`/v1/sessions/${sessionId}/events`);
-      state.eventSource.onmessage = ev => {
+      state.eventSource.onmessage = async ev => {
         let msg;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.type === 'generation_ready') {
           state.generationId = msg.generation_id;
           const url = `${msg.url}?v=${msg.generation_id}`;
-          live.src = url;
-          live.load();
-          live.play().catch(() => {});
-          videoMeta.textContent = `Gen #${msg.index + 1} · ${msg.elapsed_sec?.toFixed(1)}s inference · next in ${msg.next_in_sec?.toFixed(0)}s`;
+          try {
+            await loadSplat(url);
+            const g = msg.n_gaussians?.toLocaleString() ?? '?';
+            viewerMeta.textContent =
+              `Gen #${msg.index + 1} · ${g} gaussians · ${msg.elapsed_sec?.toFixed(1)}s · ` +
+              `next in ${msg.next_in_sec?.toFixed(0)}s`;
+          } catch (e) {
+            viewerMeta.textContent = `Splat load failed: ${e}`;
+          }
         }
         if (msg.type === 'generation_started') {
-          videoMeta.textContent = `Generating image #${msg.index + 1}…`;
+          viewerMeta.textContent = `Generating image #${msg.index + 1}…`;
         }
         if (msg.type === 'generation_failed') {
-          videoMeta.textContent = `Failed: ${msg.error}`;
+          viewerMeta.textContent = `Failed: ${msg.error}`;
           sanaStatus.className = 'status-box err';
           sanaStatus.textContent = msg.error;
         }
@@ -324,7 +369,6 @@
         const sr = await fetch(`/v1/sessions/${state.sessionId}/start`, { method: 'POST' });
         if (!sr.ok) throw new Error(await sr.text());
 
-        btnStop.disabled = true;
         connectEvents(state.sessionId);
         btnStop.disabled = false;
         refreshSession();
@@ -343,6 +387,7 @@
       btnStart.disabled = state.files.length > 0;
     });
 
+    initViewer();
     loadConfig();
   </script>
 </body>

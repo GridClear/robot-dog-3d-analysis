@@ -1,4 +1,4 @@
-"""Subprocess wrapper for SANA-WM inference."""
+"""Subprocess wrapper for SANA-WM inference + Pi3X-based splat lifting."""
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +14,8 @@ from app.motion_presets import resolve_action
 logger = logging.getLogger(__name__)
 
 _nvfp4_support_cache: bool | None = None
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SPLAT_BUILDER = REPO_ROOT / "scripts" / "build_splat.py"
 
 
 def inference_supports_nvfp4(settings: Settings | None = None) -> bool:
@@ -34,10 +36,11 @@ def inference_supports_nvfp4(settings: Settings | None = None) -> bool:
 @dataclass
 class InferenceResult:
     ok: bool
-    output_mp4: Path | None
+    output_splat: Path | None
     elapsed_sec: float
     log_path: Path
     error: str | None = None
+    n_gaussians: int = 0
 
 
 def sana_ready(settings: Settings | None = None) -> tuple[bool, str]:
@@ -45,13 +48,15 @@ def sana_ready(settings: Settings | None = None) -> tuple[bool, str]:
     script = s.inference_script
     if not script.is_file():
         return False, f"Missing inference script: {script}"
+    if not SPLAT_BUILDER.is_file():
+        return False, f"Missing splat builder: {SPLAT_BUILDER}"
     conda = shutil.which("conda")
     if not conda:
         return False, "conda not found on PATH"
     return True, "ok"
 
 
-def _build_command(
+def _build_sana_cmd(
     settings: Settings,
     image: Path,
     prompt_file: Path,
@@ -99,16 +104,48 @@ def _build_command(
         else:
             logger.warning("WM_NVFP4_ENABLED=1 but inference script has no --nvfp4 yet")
 
-    env_prefix = ["env", "DISABLE_XFORMERS=1"]
     return [
         conda,
         "run",
         "-n",
         settings.sana_conda_env,
         "--no-capture-output",
-        *env_prefix,
+        "env",
+        "DISABLE_XFORMERS=1",
         "python",
         *py_args,
+    ]
+
+
+def _build_splat_cmd(
+    settings: Settings,
+    mp4: Path,
+    seed_image: Path,
+    splat_out: Path,
+) -> list[str]:
+    conda = shutil.which("conda")
+    if not conda:
+        raise RuntimeError("conda not found on PATH")
+    return [
+        conda,
+        "run",
+        "-n",
+        settings.sana_conda_env,
+        "--no-capture-output",
+        "python",
+        str(SPLAT_BUILDER),
+        "--mp4",
+        str(mp4),
+        "--seed_image",
+        str(seed_image),
+        "--output",
+        str(splat_out),
+        "--num_views",
+        str(settings.splat_num_views),
+        "--max_gaussians",
+        str(settings.splat_max_gaussians),
+        "--conf_threshold",
+        str(settings.splat_conf_threshold),
     ]
 
 
@@ -117,6 +154,59 @@ def _find_output_mp4(output_dir: Path) -> Path | None:
         return None
     mp4s = sorted(output_dir.rglob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
     return mp4s[0] if mp4s else None
+
+
+async def _run_subprocess(
+    cmd: list[str],
+    *,
+    cwd: Path | None,
+    log_lines: list[str],
+    label: str,
+    session_id: str,
+    timeout_sec: int,
+    cancel_event: asyncio.Event | None,
+) -> int | None:
+    """Run ``cmd`` streaming stdout to ``log_lines``; respect cancel/timeout."""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(cwd) if cwd else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+
+    async def _drain() -> None:
+        assert proc.stdout is not None
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                break
+            text = line.decode(errors="replace").rstrip()
+            log_lines.append(f"[{label}] {text}")
+            logger.info("[%s %s] %s", label, session_id, text)
+
+    drain_task = asyncio.create_task(_drain())
+    t0 = time.perf_counter()
+    try:
+        while True:
+            if cancel_event and cancel_event.is_set():
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+                return None
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=1.0)
+                break
+            except asyncio.TimeoutError:
+                if time.perf_counter() - t0 > timeout_sec:
+                    proc.kill()
+                    await proc.wait()
+                    return None
+    finally:
+        await drain_task
+    return proc.returncode
 
 
 async def run_inference(
@@ -129,6 +219,12 @@ async def run_inference(
     *,
     cancel_event: asyncio.Event | None = None,
 ) -> InferenceResult:
+    """Generate a SANA-WM video and lift it to a Gaussian splat.
+
+    ``dest_tmp`` is the temp .splat path; the intermediate mp4 is kept
+    alongside the artifact for debugging but is not promoted to the
+    public ``latest`` slot.
+    """
     settings = get_settings()
     ready, note = sana_ready(settings)
     if not ready:
@@ -136,81 +232,70 @@ async def run_inference(
 
     work_dir = dest_tmp.parent / f"work_{image_index:04d}"
     work_dir.mkdir(parents=True, exist_ok=True)
-    log_path = get_settings().data_dir / "sessions" / session_id / "logs" / f"inference_{image_index:04d}.log"
+    log_path = settings.data_dir / "sessions" / session_id / "logs" / f"inference_{image_index:04d}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = _build_command(settings, image, prompt_file, action, work_dir)
+    log_lines: list[str] = []
     t0 = time.perf_counter()
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=str(settings.sana_repo),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
+    sana_cmd = _build_sana_cmd(settings, image, prompt_file, action, work_dir)
+    rc = await _run_subprocess(
+        sana_cmd,
+        cwd=settings.sana_repo,
+        log_lines=log_lines,
+        label="sana-wm",
+        session_id=session_id,
+        timeout_sec=settings.inference_timeout_sec,
+        cancel_event=cancel_event,
     )
+    if rc is None:
+        elapsed = time.perf_counter() - t0
+        log_path.write_text("\n".join(log_lines) + "\n[cancelled-or-timeout]\n", encoding="utf-8")
+        return InferenceResult(False, None, elapsed, log_path, "cancelled or sana timeout")
+    if rc != 0:
+        elapsed = time.perf_counter() - t0
+        log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+        return InferenceResult(False, None, elapsed, log_path, f"sana-wm exited {rc}")
 
-    log_lines: list[str] = []
+    mp4 = _find_output_mp4(work_dir)
+    if not mp4:
+        elapsed = time.perf_counter() - t0
+        log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+        return InferenceResult(False, None, elapsed, log_path, "no mp4 in output_dir")
 
-    async def _drain() -> None:
-        assert proc.stdout is not None
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
-            text = line.decode(errors="replace").rstrip()
-            log_lines.append(text)
-            logger.info("[sana-wm %s] %s", session_id, text)
-
-    drain_task = asyncio.create_task(_drain())
-    try:
-        while True:
-            if cancel_event and cancel_event.is_set():
-                proc.terminate()
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=10)
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                elapsed = time.perf_counter() - t0
-                log_path.write_text("\n".join(log_lines) + "\n[cancelled]\n", encoding="utf-8")
-                return InferenceResult(False, None, elapsed, log_path, "cancelled")
-
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=1.0)
-                break
-            except asyncio.TimeoutError:
-                if time.perf_counter() - t0 > settings.inference_timeout_sec:
-                    proc.kill()
-                    await proc.wait()
-                    elapsed = time.perf_counter() - t0
-                    log_path.write_text("\n".join(log_lines) + "\n[timeout]\n", encoding="utf-8")
-                    return InferenceResult(False, None, elapsed, log_path, "inference timeout")
-    finally:
-        await drain_task
-
+    splat_cmd = _build_splat_cmd(settings, mp4, image, dest_tmp)
+    rc = await _run_subprocess(
+        splat_cmd,
+        cwd=REPO_ROOT,
+        log_lines=log_lines,
+        label="splat",
+        session_id=session_id,
+        timeout_sec=settings.splat_timeout_sec,
+        cancel_event=cancel_event,
+    )
     elapsed = time.perf_counter() - t0
     log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
 
-    if proc.returncode != 0:
-        return InferenceResult(
-            False,
-            None,
-            elapsed,
-            log_path,
-            f"inference exited {proc.returncode}",
-        )
+    if rc is None:
+        return InferenceResult(False, None, elapsed, log_path, "cancelled or splat timeout")
+    if rc != 0:
+        return InferenceResult(False, None, elapsed, log_path, f"splat builder exited {rc}")
+    if not dest_tmp.is_file() or dest_tmp.stat().st_size == 0:
+        return InferenceResult(False, None, elapsed, log_path, "splat output missing or empty")
 
-    src = _find_output_mp4(work_dir)
-    if not src:
-        return InferenceResult(False, None, elapsed, log_path, "no mp4 in output_dir")
+    n_gaussians = dest_tmp.stat().st_size // 32
+    # Keep mp4 next to the splat for debugging; rename so generations don't collide.
+    mp4_keep = dest_tmp.with_suffix(".mp4")
+    try:
+        shutil.copy2(mp4, mp4_keep)
+    except OSError:
+        pass
 
-    dest_tmp.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dest_tmp)
-    return InferenceResult(True, dest_tmp, elapsed, log_path, None)
+    return InferenceResult(True, dest_tmp, elapsed, log_path, None, n_gaussians)
 
 
-def promote_video(tmp_path: Path, final_path: Path, latest_path: Path) -> None:
-    """Atomically promote temp mp4 to generation artifact and latest."""
+def promote_splat(tmp_path: Path, final_path: Path, latest_path: Path) -> None:
+    """Atomically promote temp .splat to generation artifact and latest."""
     final_path.parent.mkdir(parents=True, exist_ok=True)
     if final_path.exists():
         final_path.unlink()

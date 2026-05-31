@@ -65,8 +65,10 @@ def test_start_mocked_inference(client: TestClient, tmp_path: Path):
 
     async def fake_run(session_id, image_index, image, prompt_file, action, dest_tmp, **kwargs):
         dest_tmp.parent.mkdir(parents=True, exist_ok=True)
-        dest_tmp.write_bytes(b"\x00\x00\x00\x00")
-        return sana_runner.InferenceResult(True, dest_tmp, 0.5, tmp_path / "log.txt", None)
+        dest_tmp.write_bytes(b"\x00" * 32)
+        return sana_runner.InferenceResult(
+            True, dest_tmp, 0.5, tmp_path / "log.txt", None, n_gaussians=1
+        )
 
     with patch("app.services.sana_runner.sana_ready", return_value=(True, "ok")):
         with patch("app.services.sana_runner.run_inference", new=AsyncMock(side_effect=fake_run)):
