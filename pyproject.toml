@@ -1,6 +1,6 @@
 [project]
-name = "robot-dog-3d-analysis"
-version = "0.1.0"
+name = "robot-dog-world-model"
+version = "0.2.0"
 requires-python = ">=3.12"
 
 [tool.pytest.ini_options]
@@ -8,5 +8,5 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
-    "live: real GPU / ffmpeg tests (set SPLAT_LIVE=1)",
+    "live: real SANA-WM / GPU tests (set WM_LIVE=1)",
 ]

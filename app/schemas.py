@@ -1,4 +1,4 @@
-"""API and pipeline data contracts."""
+"""API data contracts for world-model streaming sessions."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,74 +8,64 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class JobState(StrEnum):
-    QUEUED = "queued"
+class SessionState(StrEnum):
+    CREATED = "created"
     RUNNING = "running"
-    SUCCEEDED = "succeeded"
+    STOPPED = "stopped"
+    COMPLETED = "completed"
     FAILED = "failed"
 
 
-class JobStage(StrEnum):
-    EXTRACT = "extract"
-    POSE = "pose"
-    TRAIN = "train"
-    EXPORT = "export"
+class ImageStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
     DONE = "done"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
 
-class JobError(BaseModel):
-    stage: str
-    message: str
-    traceback_path: str | None = None
+class ImageQueueItem(BaseModel):
+    index: int
+    filename: str
+    status: ImageStatus = ImageStatus.PENDING
+    error: str | None = None
+    elapsed_sec: float | None = None
 
 
-class JobArtifacts(BaseModel):
-    ply: str | None = None
-    splat: str | None = None
-    colmap_dir: str | None = None
-    cameras_json: str | None = None
-    preview_jpg: str | None = None
-    log_path: str | None = None
-
-
-class JobRecord(BaseModel):
-    job_id: str
+class SessionRecord(BaseModel):
+    session_id: str
     created_at: datetime
-    state: JobState
-    stage: JobStage | None = None
-    progress_pct: float = Field(default=0.0, ge=0.0, le=100.0)
-    n_frames: int = 0
-    pose_backend: str = "vggt"
-    train_backend: str = "gsplat"
-    max_iterations: int | None = None
-    artifacts: JobArtifacts = Field(default_factory=JobArtifacts)
-    error: JobError | None = None
-    timings_ms: dict[str, float] = Field(default_factory=dict)
+    state: SessionState
+    prompt: str
+    action: str
+    loop: bool = False
+    n_images: int = 0
+    current_index: int | None = None
+    generation_id: int = 0
+    images: list[ImageQueueItem] = Field(default_factory=list)
+    error: str | None = None
+    interval_sec: float = 30.0
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
-class IngestResponse(BaseModel):
-    job_id: str
-    n_frames: int
+class CreateSessionResponse(BaseModel):
+    session_id: str
+    n_images: int
+    interval_sec: float
 
 
-class RunJobRequest(BaseModel):
-    pose_backend: str | None = None
-    train_backend: str | None = None
-    max_iterations: int | None = None
+class StartSessionResponse(BaseModel):
+    session_id: str
+    state: SessionState
 
 
-class RunJobResponse(BaseModel):
-    job_id: str
-    state: JobState
-
-
-class BackendStatus(BaseModel):
-    name: str
-    ready: bool
-    note: str = ""
-
-
-class BackendsStatusResponse(BaseModel):
-    pose: list[BackendStatus]
-    train: list[BackendStatus]
-    gpu: dict[str, Any] = Field(default_factory=dict)
+class ConfigResponse(BaseModel):
+    interval_sec: float
+    num_frames: int
+    fps: float
+    max_clip_seconds: float
+    use_refiner: bool
+    nvfp4_enabled: bool
+    motion_presets: list[str]
+    sana_ready: bool
+    sana_note: str = ""

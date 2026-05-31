@@ -2,7 +2,8 @@
 __pycache__/
 *.pyc
 .env
-data/
-vendor/gsplat/
+data/sessions/
 .pytest_cache/
 *.egg-info/
+third_party/Sana/
+miniconda.sh

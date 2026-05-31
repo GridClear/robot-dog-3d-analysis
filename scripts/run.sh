@@ -2,5 +2,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 exec ./.venv/bin/uvicorn app.main:app \
-  --host "${SPLAT_HOST:-0.0.0.0}" \
-  --port "${SPLAT_PORT:-8090}"
+  --host "${WM_HOST:-0.0.0.0}" \
+  --port "${WM_PORT:-8090}"

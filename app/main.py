@@ -1,23 +1,29 @@
-"""Multi-image → splat reconstruction service."""
+"""SANA-WM streaming world-model service."""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
-from app.routers import health, jobs
-from app.services import worker
+from app.config import get_settings
+from app.routers import health, sessions
+from app.services import storage
+
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await worker.start_worker()
+    settings = get_settings()
+    storage.cleanup_old_sessions(settings.session_max_age_hours)
     yield
-    await worker.stop_worker()
 
 
-app = FastAPI(title="robot-dog 3d splat", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="robot-dog world model", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,4 +31,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(health.router)
-app.include_router(jobs.router)
+app.include_router(sessions.router)
+
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/")
+async def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")

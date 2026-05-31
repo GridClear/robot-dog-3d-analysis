@@ -1,0 +1,12 @@
+{
+  "runs": [],
+  "recommended": {
+    "profile": "placeholder",
+    "interval_sec": 30,
+    "use_refiner": true,
+    "inference_step": 60,
+    "num_frames": 321,
+    "nvfp4_enabled": false,
+    "note": "Run ./scripts/benchmark_sana_wm.sh on DGX Spark to replace these defaults"
+  }
+}

@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>World Model — SANA-WM</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --panel: #171a22;
+      --border: #2a3040;
+      --text: #e8ecf4;
+      --muted: #8b95a8;
+      --accent: #3b82f6;
+      --ok: #22c55e;
+      --err: #ef4444;
+      --warn: #f59e0b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: grid;
+      grid-template-columns: 400px 1fr;
+    }
+    @media (max-width: 900px) {
+      body { grid-template-columns: 1fr; grid-template-rows: auto 50vh; }
+    }
+    aside {
+      border-right: 1px solid var(--border);
+      padding: 20px;
+      overflow-y: auto;
+      max-height: 100vh;
+    }
+    main {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      background: #050508;
+    }
+    h1 { font-size: 1.15rem; margin: 0 0 4px; font-weight: 650; }
+    .sub { color: var(--muted); font-size: 0.82rem; margin-bottom: 16px; }
+    label {
+      display: block;
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .drop {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 20px 14px;
+      text-align: center;
+      cursor: pointer;
+      margin-bottom: 12px;
+    }
+    .drop:hover, .drop.dragover { border-color: var(--accent); background: rgba(59,130,246,0.06); }
+    input[type="file"] { display: none; }
+    .thumbs {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+      gap: 6px;
+      margin-bottom: 12px;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .thumbs img {
+      width: 100%;
+      aspect-ratio: 1;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .field { margin-bottom: 12px; }
+    textarea, select, input[type="text"] {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.9rem;
+    }
+    textarea { min-height: 72px; resize: vertical; }
+    .row { display: flex; gap: 8px; }
+    .row button { flex: 1; }
+    button {
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button.primary { background: var(--accent); color: #fff; }
+    button.primary:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+    .status-box {
+      font-size: 0.82rem;
+      padding: 10px;
+      border-radius: 8px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+    .status-box.warn { border-color: var(--warn); color: var(--warn); }
+    .status-box.err { border-color: var(--err); color: var(--err); }
+    #queue { list-style: none; padding: 0; margin: 0; font-size: 0.82rem; }
+    #queue li {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+    }
+    #queue li.running { color: var(--accent); }
+    #queue li.done { color: var(--ok); }
+    #queue li.failed { color: var(--err); }
+    .video-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    video {
+      max-width: 100%;
+      max-height: calc(100vh - 48px);
+      border-radius: 8px;
+      background: #000;
+    }
+    .video-meta {
+      text-align: center;
+      padding: 8px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    label.check { text-transform: none; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--text); }
+  </style>
+</head>
+<body>
+  <aside>
+    <h1>World Model Stream</h1>
+    <p class="sub">SANA-WM — sequential images → 720p video (production cadence)</p>
+
+    <div id="sanaStatus" class="status-box">Loading config…</div>
+
+    <label>Images (order preserved)</label>
+    <div class="drop" id="dropZone">
+      <p>Drop images or click to select</p>
+      <small>JPEG/PNG/WebP · max height 720p</small>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" multiple />
+    <div class="thumbs" id="thumbs"></div>
+
+    <div class="field">
+      <label for="prompt">Scene prompt</label>
+      <textarea id="prompt" placeholder="Describe the scene for the world model…"></textarea>
+    </div>
+
+    <div class="field">
+      <label for="motion">Camera motion preset</label>
+      <select id="motion"></select>
+    </div>
+
+    <div class="field">
+      <label class="check">
+        <input type="checkbox" id="loop" />
+        Loop queue when finished
+      </label>
+    </div>
+
+    <div class="row">
+      <button class="primary" id="btnStart" disabled>Start stream</button>
+      <button class="secondary" id="btnStop" disabled>Stop</button>
+    </div>
+
+    <ul id="queue"></ul>
+  </aside>
+
+  <main>
+    <div class="video-wrap">
+      <video id="live" autoplay muted loop playsinline playsInline></video>
+    </div>
+    <div class="video-meta" id="videoMeta">No generation yet</div>
+  </main>
+
+  <script>
+    const state = {
+      files: [],
+      sessionId: null,
+      eventSource: null,
+      generationId: 0,
+      config: null,
+    };
+
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const thumbs = document.getElementById('thumbs');
+    const btnStart = document.getElementById('btnStart');
+    const btnStop = document.getElementById('btnStop');
+    const live = document.getElementById('live');
+    const videoMeta = document.getElementById('videoMeta');
+    const sanaStatus = document.getElementById('sanaStatus');
+    const queueEl = document.getElementById('queue');
+    const motion = document.getElementById('motion');
+    const promptEl = document.getElementById('prompt');
+
+    async function loadConfig() {
+      const r = await fetch('/v1/sessions/config');
+      state.config = await r.json();
+      motion.innerHTML = state.config.motion_presets
+        .map(p => `<option value="${p}">${p.replace(/_/g, ' ')}</option>`)
+        .join('');
+      const interval = state.config.interval_sec;
+      if (!state.config.sana_ready) {
+        sanaStatus.className = 'status-box warn';
+        sanaStatus.textContent = `SANA not ready: ${state.config.sana_note}. Run scripts/setup_sana_wm.sh`;
+      } else {
+        sanaStatus.className = 'status-box';
+        sanaStatus.textContent = `Interval ~${interval}s · ${state.config.num_frames} frames @ ${state.config.fps} fps (≤${state.config.max_clip_seconds}s clip)`;
+      }
+    }
+
+    function renderThumbs() {
+      thumbs.innerHTML = '';
+      state.files.forEach((f, i) => {
+        const img = document.createElement('img');
+        img.src = URL.createObjectURL(f);
+        img.title = `${i + 1}: ${f.name}`;
+        thumbs.appendChild(img);
+      });
+      btnStart.disabled = state.files.length === 0 || !state.config?.sana_ready;
+    }
+
+    function addFiles(fileList) {
+      for (const f of fileList) {
+        if (f.type.startsWith('image/')) state.files.push(f);
+      }
+      renderThumbs();
+    }
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      addFiles(fileInput.files);
+      fileInput.value = '';
+    });
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      addFiles(e.dataTransfer.files);
+    });
+
+    function renderQueue(images) {
+      if (!images?.length) {
+        queueEl.innerHTML = '<li style="color:var(--muted)">No queue</li>';
+        return;
+      }
+      queueEl.innerHTML = images.map(img =>
+        `<li class="${img.status}"><span>#${img.index + 1} ${img.filename}</span><span>${img.status}</span></li>`
+      ).join('');
+    }
+
+    function connectEvents(sessionId) {
+      if (state.eventSource) state.eventSource.close();
+      state.eventSource = new EventSource(`/v1/sessions/${sessionId}/events`);
+      state.eventSource.onmessage = ev => {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+        if (msg.type === 'generation_ready') {
+          state.generationId = msg.generation_id;
+          const url = `${msg.url}?v=${msg.generation_id}`;
+          live.src = url;
+          live.load();
+          live.play().catch(() => {});
+          videoMeta.textContent = `Gen #${msg.index + 1} · ${msg.elapsed_sec?.toFixed(1)}s inference · next in ${msg.next_in_sec?.toFixed(0)}s`;
+        }
+        if (msg.type === 'generation_started') {
+          videoMeta.textContent = `Generating image #${msg.index + 1}…`;
+        }
+        if (msg.type === 'generation_failed') {
+          videoMeta.textContent = `Failed: ${msg.error}`;
+          sanaStatus.className = 'status-box err';
+          sanaStatus.textContent = msg.error;
+        }
+        if (['completed', 'stopped'].includes(msg.type)) {
+          btnStop.disabled = true;
+          btnStart.disabled = false;
+        }
+        refreshSession();
+      };
+    }
+
+    async function refreshSession() {
+      if (!state.sessionId) return;
+      const r = await fetch(`/v1/sessions/${state.sessionId}`);
+      if (!r.ok) return;
+      const rec = await r.json();
+      renderQueue(rec.images);
+    }
+
+    btnStart.addEventListener('click', async () => {
+      const fd = new FormData();
+      state.files.forEach(f => fd.append('files', f));
+      fd.append('prompt', promptEl.value);
+      fd.append('action', motion.value);
+      fd.append('loop', document.getElementById('loop').checked ? 'true' : 'false');
+
+      btnStart.disabled = true;
+      try {
+        const cr = await fetch('/v1/sessions', { method: 'POST', body: fd });
+        if (!cr.ok) throw new Error(await cr.text());
+        const created = await cr.json();
+        state.sessionId = created.session_id;
+        renderQueue(state.files.map((f, i) => ({ index: i, filename: f.name, status: 'pending' })));
+
+        const sr = await fetch(`/v1/sessions/${state.sessionId}/start`, { method: 'POST' });
+        if (!sr.ok) throw new Error(await sr.text());
+
+        btnStop.disabled = true;
+        connectEvents(state.sessionId);
+        btnStop.disabled = false;
+        refreshSession();
+      } catch (e) {
+        sanaStatus.className = 'status-box err';
+        sanaStatus.textContent = String(e);
+        btnStart.disabled = false;
+      }
+    });
+
+    btnStop.addEventListener('click', async () => {
+      if (!state.sessionId) return;
+      await fetch(`/v1/sessions/${state.sessionId}/stop`, { method: 'POST' });
+      if (state.eventSource) state.eventSource.close();
+      btnStop.disabled = true;
+      btnStart.disabled = state.files.length > 0;
+    });
+
+    loadConfig();
+  </script>
+</body>
+</html>
